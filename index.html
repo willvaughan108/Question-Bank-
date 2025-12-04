@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MQ-4C NFO Question Bank</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header id="appHeader" class="app-header hidden">
+      <div class="brand">MQ-4C NFO Question Bank</div>
+      <div class="header-info">
+        <span id="totalCount" class="pill">Total: 0</span>
+        <span id="progressText">Question 0 of 0</span>
+      </div>
+    </header>
+
+    <div id="errorBanner" class="error-banner hidden"></div>
+
+    <main id="mainContent">
+      <section id="loadScreen" class="load-screen">
+        <div class="load-card">
+          <h1>MQ-4C NFO Question Bank</h1>
+          <p class="subtext">Select your exported Access question bank (.json or .csv) and optional answer sheet (.csv).</p>
+          <label class="file-label" for="fileInput">Choose question JSON/CSV file</label>
+          <input id="fileInput" type="file" accept=".json,.csv">
+          <label class="file-label" for="answerFileInput">Choose answer CSV file (optional)</label>
+          <input id="answerFileInput" type="file" accept=".csv">
+          <button id="loadBtn" class="primary" disabled>Load Questions</button>
+        </div>
+      </section>
+
+      <section id="modeScreen" class="load-screen hidden">
+        <div class="load-card">
+          <h2>Choose a mode</h2>
+          <p class="subtext">Study mode or generate a test from the bank.</p>
+          <div class="mode-actions">
+            <button id="studyModeBtn" class="primary">Study</button>
+            <button id="testModeBtn" class="secondary">Generate Test</button>
+          </div>
+          <button id="backToFilesBtn" class="ghost">Back to file selection</button>
+        </div>
+      </section>
+
+      <section id="quizScreen" class="quiz-screen hidden">
+        <div id="studyControls" class="controls-panel hidden">
+          <div class="control-group">
+            <label for="categoryFilter">Category</label>
+            <select id="categoryFilter"></select>
+          </div>
+          <div class="control-group">
+            <label for="studyBookSelect">Book type</label>
+            <select id="studyBookSelect">
+              <option value="all">All</option>
+              <option value="open">Open book</option>
+              <option value="closed">Closed book</option>
+            </select>
+          </div>
+          <div class="control-group checkbox-group">
+            <input type="checkbox" id="shuffleToggle">
+            <label for="shuffleToggle">Shuffle questions</label>
+          </div>
+          <div class="control-actions">
+            <button id="applyFiltersBtn" class="secondary">Apply Filters</button>
+            <button id="resetFiltersBtn" class="ghost">Reset Filters</button>
+            <button id="toModeFromStudy" class="ghost">Mode select</button>
+          </div>
+        </div>
+
+        <div id="testControls" class="controls-panel hidden">
+          <div class="control-group">
+            <label>Test type</label>
+            <div class="radio-row">
+              <label><input type="radio" name="bookMode" value="all" checked> All</label>
+              <label><input type="radio" name="bookMode" value="open"> Open book</label>
+              <label><input type="radio" name="bookMode" value="closed"> Closed book</label>
+            </div>
+          </div>
+          <div class="control-group">
+            <label for="testCategorySelect">Subject (category)</label>
+            <select id="testCategorySelect"></select>
+          </div>
+          <div class="control-group checkbox-group">
+            <input type="checkbox" id="testShuffleToggle">
+            <label for="testShuffleToggle">Shuffle test</label>
+          </div>
+          <div class="control-actions">
+            <button id="generateTestBtn" type="button" class="primary">Generate Test</button>
+            <button id="resetTestBtn" type="button" class="ghost">Reset Test</button>
+            <button id="toModeFromTest" class="ghost">Mode select</button>
+          </div>
+        </div>
+
+        <div class="summary-bar" id="summaryBar">
+          <span id="answeredCount">Answered: 0 of 0</span>
+          <span id="correctCount">Correct: 0</span>
+          <span id="accuracyStat">Accuracy: 0%</span>
+        </div>
+
+        <section class="question-layout">
+          <div class="question-card" id="questionCard">
+            <div class="question-header">
+              <div id="questionCategory" class="chip">Category</div>
+              <div id="questionDifficulty" class="chip">Difficulty</div>
+            </div>
+            <h2 id="questionText">Load a question bank to begin.</h2>
+            <div id="fillContainer" class="fill-container hidden">
+              <label for="fillInput">Fill in the blank</label>
+              <input id="fillInput" type="text" placeholder="Type your answer here">
+            </div>
+            <form id="choicesForm" class="choices">
+              <label class="choice" data-choice="A">
+                <input type="radio" name="choice" value="A">
+                <span class="choice-prefix">A</span>
+                <span id="choiceAText" class="choice-text">Option A</span>
+              </label>
+              <label class="choice" data-choice="B">
+                <input type="radio" name="choice" value="B">
+                <span class="choice-prefix">B</span>
+                <span id="choiceBText" class="choice-text">Option B</span>
+              </label>
+              <label class="choice" data-choice="C">
+                <input type="radio" name="choice" value="C">
+                <span class="choice-prefix">C</span>
+                <span id="choiceCText" class="choice-text">Option C</span>
+              </label>
+              <label class="choice" data-choice="D">
+                <input type="radio" name="choice" value="D">
+                <span class="choice-prefix">D</span>
+                <span id="choiceDText" class="choice-text">Option D</span>
+              </label>
+            </form>
+
+            <div id="answerReveal" class="answer-reveal hidden">
+              <p id="answerText">Correct answer:</p>
+              <p id="referenceText" class="reference"></p>
+            </div>
+
+            <div class="actions">
+              <button id="showAnswerBtn" type="button" class="secondary">Show Answer</button>
+              <div class="nav-buttons">
+                <button id="prevBtn" type="button" class="ghost">Previous</button>
+                <button id="nextBtn" type="button" class="primary">Next</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
