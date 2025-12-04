@@ -25,8 +25,10 @@ const QuizApp = (() => {
       bookMode: 'all', // all | open | closed
       category: 'all',
       shuffle: false,
+      genMode: 'auto',
     },
     currentMode: null, // null | 'study' | 'test'
+    manualSelection: new Set(),
   };
 
   const elements = {};
@@ -63,11 +65,17 @@ const QuizApp = (() => {
     elements.testControls = document.getElementById('testControls');
 
     elements.bookModeRadios = Array.from(document.querySelectorAll('input[name="bookMode"]'));
+    elements.genModeRadios = Array.from(document.querySelectorAll('input[name="genMode"]'));
     elements.testCategorySelect = document.getElementById('testCategorySelect');
     elements.testShuffleToggle = document.getElementById('testShuffleToggle');
     elements.generateTestBtn = document.getElementById('generateTestBtn');
     elements.resetTestBtn = document.getElementById('resetTestBtn');
     elements.toModeFromTest = document.getElementById('toModeFromTest');
+    elements.manualPanel = document.getElementById('manualTestPanel');
+    elements.manualList = document.getElementById('manualList');
+    elements.manualCategorySelect = document.getElementById('manualCategorySelect');
+    elements.selectAllManual = document.getElementById('selectAllManual');
+    elements.clearManual = document.getElementById('clearManual');
 
     elements.summaryBar = document.getElementById('summaryBar');
     elements.answeredCount = document.getElementById('answeredCount');
@@ -114,6 +122,13 @@ const QuizApp = (() => {
     elements.bookModeRadios.forEach((r) =>
       r.addEventListener('change', (e) => {
         state.testMode.bookMode = e.target.value;
+        renderManualList();
+      }),
+    );
+    elements.genModeRadios.forEach((r) =>
+      r.addEventListener('change', (e) => {
+        state.testMode.genMode = e.target.value;
+        renderManualList();
       }),
     );
     elements.testShuffleToggle.addEventListener('change', (e) => {
@@ -121,13 +136,21 @@ const QuizApp = (() => {
     });
     elements.testCategorySelect.addEventListener('change', (e) => {
       state.testMode.category = e.target.value;
+      renderManualList();
     });
+    elements.manualCategorySelect.addEventListener('change', renderManualList);
+    elements.selectAllManual.addEventListener('click', selectAllManualVisible);
+    elements.clearManual.addEventListener('click', clearManualSelection);
     elements.generateTestBtn.addEventListener('click', generateTest);
     elements.resetTestBtn.addEventListener('click', () => {
-      state.testMode = { bookMode: 'all', category: 'all', shuffle: false };
+      state.testMode = { bookMode: 'all', category: 'all', shuffle: false, genMode: 'auto' };
+      state.manualSelection = new Set();
       elements.bookModeRadios.forEach((r) => (r.checked = r.value === 'all'));
+      elements.genModeRadios.forEach((r) => (r.checked = r.value === 'auto'));
       elements.testCategorySelect.value = 'all';
       elements.testShuffleToggle.checked = false;
+      elements.manualCategorySelect.value = 'all';
+      renderManualList();
       resetFilters();
     });
     elements.toModeFromTest.addEventListener('click', showModeSelection);
@@ -469,13 +492,17 @@ const QuizApp = (() => {
 
     setOptions(elements.categoryFilter, categories, 'categories');
     setOptions(elements.testCategorySelect, categories, 'categories');
+    setOptions(elements.manualCategorySelect, categories, 'categories');
     elements.shuffleToggle.checked = false;
     state.filters = { category: 'all', bookMode: 'all', shuffle: false };
-    state.testMode = { bookMode: 'all', category: 'all', shuffle: false };
+    state.testMode = { bookMode: 'all', category: 'all', shuffle: false, genMode: 'auto' };
     elements.bookModeRadios?.forEach((r) => (r.checked = r.value === 'all'));
+    elements.genModeRadios?.forEach((r) => (r.checked = r.value === 'auto'));
     elements.testShuffleToggle.checked = false;
     elements.testCategorySelect.value = 'all';
     elements.studyBookSelect.value = 'all';
+    elements.manualCategorySelect.value = 'all';
+    state.manualSelection = new Set();
   };
 
   const applyFilters = () => {
@@ -522,8 +549,9 @@ const QuizApp = (() => {
     const bookMode = state.testMode.bookMode || 'all';
     const category = elements.testCategorySelect.value || 'all';
     const shuffle = state.testMode.shuffle;
+    const genMode = state.testMode.genMode || 'auto';
 
-    let list = state.allQuestions.filter((q) => {
+    let base = state.allQuestions.filter((q) => {
       const matchesCategory = category === 'all' || q.category === category;
       let matchesBook = true;
       if (bookMode === 'open') matchesBook = q.isOpenBook === true;
@@ -531,13 +559,127 @@ const QuizApp = (() => {
       return matchesCategory && matchesBook;
     });
 
-    if (shuffle) list = shuffleArray(list);
+    if (genMode === 'manual') {
+      // Use manually selected IDs; fall back to none if empty.
+      base = base.filter((q) => state.manualSelection.has(q.id));
+      if (!base.length) {
+        showError('No manual questions selected. Check boxes to include questions.');
+        return;
+      }
+    } else if (shuffle) {
+      base = shuffleArray(base);
+    }
 
-    state.filteredQuestions = list;
+    state.filteredQuestions = base;
     state.currentIndex = 0;
     state.answers = {};
     renderQuestion();
     updateSummary();
+
+    // Build printable test
+    openPrintableTest(base);
+  };
+
+  const renderManualList = () => {
+    if (state.testMode.genMode !== 'manual' || !state.allQuestions.length) {
+      elements.manualPanel.classList.add('hidden');
+      return;
+    }
+    elements.manualPanel.classList.remove('hidden');
+    const bookMode = state.testMode.bookMode || 'all';
+    const category = elements.manualCategorySelect.value || 'all';
+    const filtered = state.allQuestions.filter((q) => {
+      const matchesCategory = category === 'all' || q.category === category;
+      let matchesBook = true;
+      if (bookMode === 'open') matchesBook = q.isOpenBook === true;
+      if (bookMode === 'closed') matchesBook = q.isOpenBook === false;
+      return matchesCategory && matchesBook;
+    });
+
+    elements.manualList.innerHTML = '';
+    filtered.forEach((q) => {
+      const row = document.createElement('div');
+      row.className = 'manual-item';
+      row.dataset.qid = q.id;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = state.manualSelection.has(q.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) state.manualSelection.add(q.id);
+        else state.manualSelection.delete(q.id);
+      });
+      const body = document.createElement('div');
+      const title = document.createElement('div');
+      title.textContent = q.question;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `${q.category || 'Uncategorized'}${q.isOpenBook === true ? ' · Open' : q.isOpenBook === false ? ' · Closed' : ''}`;
+      body.appendChild(title);
+      body.appendChild(meta);
+      row.appendChild(checkbox);
+      row.appendChild(body);
+      elements.manualList.appendChild(row);
+    });
+  };
+
+  const selectAllManualVisible = () => {
+    elements.manualList.querySelectorAll('.manual-item').forEach((row) => {
+      const cb = row.querySelector('input[type="checkbox"]');
+      cb.checked = true;
+      const idAttr = row.dataset.qid;
+      if (idAttr) state.manualSelection.add(idAttr);
+    });
+  };
+
+  const clearManualSelection = () => {
+    state.manualSelection = new Set();
+    elements.manualList.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+  };
+
+  const openPrintableTest = (questions) => {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    const html = `
+      <html>
+      <head>
+        <title>Generated Test</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+          .q { margin-bottom: 18px; }
+          .q h3 { margin: 0 0 6px; font-size: 16px; }
+          .meta { color: #555; font-size: 12px; margin-bottom: 6px; }
+          ul { margin: 4px 0 0 18px; padding: 0; }
+          li { margin: 2px 0; }
+        </style>
+      </head>
+      <body>
+        <h1>Generated Test</h1>
+        ${questions
+          .map(
+            (q, idx) => `
+              <div class="q">
+                <h3>${idx + 1}. ${q.question}</h3>
+                <div class="meta">${q.category || 'Uncategorized'}${q.isOpenBook === true ? ' · Open' : q.isOpenBook === false ? ' · Closed' : ''}</div>
+                ${
+                  q.isFillBlank
+                    ? '<p>______________________________</p>'
+                    : `<ul>
+                        <li>A) ${q.choices.A}</li>
+                        <li>B) ${q.choices.B}</li>
+                        <li>C) ${q.choices.C}</li>
+                        <li>D) ${q.choices.D}</li>
+                      </ul>`
+                }
+              </div>
+            `,
+          )
+          .join('')}
+        <script>window.print();</script>
+      </body>
+      </html>
+    `;
+    win.document.write(html);
+    win.document.close();
   };
 
   const showModeSelection = () => {
@@ -569,6 +711,7 @@ const QuizApp = (() => {
     state.answers = {};
     renderQuestion();
     updateSummary();
+    renderManualList();
   };
 
   const shuffleArray = (array) => {

@@ -78,6 +78,13 @@
             </div>
           </div>
           <div class="control-group">
+            <label>Generation mode</label>
+            <div class="radio-row">
+              <label><input type="radio" name="genMode" value="auto" checked> Auto</label>
+              <label><input type="radio" name="genMode" value="manual"> Manual</label>
+            </div>
+          </div>
+          <div class="control-group">
             <label for="testCategorySelect">Subject (category)</label>
             <select id="testCategorySelect"></select>
           </div>
@@ -90,6 +97,18 @@
             <button id="resetTestBtn" type="button" class="ghost">Reset Test</button>
             <button id="toModeFromTest" class="ghost">Mode select</button>
           </div>
+        </div>
+
+        <div id="manualTestPanel" class="manual-panel hidden">
+          <div class="manual-header">
+            <div class="control-group">
+              <label for="manualCategorySelect">Sort/Filter by category</label>
+              <select id="manualCategorySelect"></select>
+            </div>
+            <button id="selectAllManual" class="secondary" type="button">Select all in view</button>
+            <button id="clearManual" class="ghost" type="button">Clear selection</button>
+          </div>
+          <div id="manualList" class="manual-list"></div>
         </div>
 
         <div class="summary-bar" id="summaryBar">
