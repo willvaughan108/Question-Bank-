@@ -405,9 +405,8 @@ h2 {
 }
 
 .choice {
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -417,7 +416,7 @@ h2 {
 }
 
 .choice input {
-  justify-self: center;
+  margin-top: 4px;
 }
 
 .choice:hover {
@@ -445,6 +444,10 @@ h2 {
 
 .choice-text {
   color: var(--text);
+  white-space: normal;
+  word-break: normal;
+  display: inline-block;
+  line-height: 1.4;
 }
 
 .choice input:checked ~ .choice-text {
@@ -503,6 +506,10 @@ h2 {
 .answer-reveal .reference {
   color: var(--muted);
   margin: 4px 0 0;
+}
+
+#markCorrectBtn {
+  margin-top: 8px;
 }
 
 .actions {

@@ -17,7 +17,7 @@ const QuizApp = (() => {
     allQuestions: [],
     filteredQuestions: [],
     currentIndex: 0,
-    answers: {}, // keyed by question id -> { selectedChoice, isCorrect, revealed }
+    answers: {}, // keyed by question id -> { selectedChoices, selectedChoice, fillText, isCorrect, manualCorrect, revealed }
     filters: {
       category: 'all',
       shuffle: false,
@@ -105,6 +105,7 @@ const QuizApp = (() => {
     elements.choiceBText = document.getElementById('choiceBText');
     elements.choiceCText = document.getElementById('choiceCText');
     elements.choiceDText = document.getElementById('choiceDText');
+    elements.choiceEText = document.getElementById('choiceEText');
     elements.choicesForm = document.getElementById('choicesForm');
     elements.fillContainer = document.getElementById('fillContainer');
     elements.fillInput = document.getElementById('fillInput');
@@ -113,6 +114,7 @@ const QuizApp = (() => {
     elements.userAnswerText = document.getElementById('userAnswerText');
     elements.answerText = document.getElementById('answerText');
     elements.referenceText = document.getElementById('referenceText');
+    elements.markCorrectBtn = document.getElementById('markCorrectBtn');
     elements.sessionSummary = document.getElementById('sessionSummary');
     elements.summaryPercent = document.getElementById('summaryPercent');
     elements.summaryDetails = document.getElementById('summaryDetails');
@@ -210,6 +212,7 @@ const QuizApp = (() => {
     elements.skipToSummaryBtn?.addEventListener('click', showSessionSummary);
     elements.choicesForm.addEventListener('change', handleAnswerChange);
     elements.fillInput.addEventListener('input', handleFillInput);
+    elements.markCorrectBtn?.addEventListener('click', toggleManualCredit);
     elements.startOverBtn?.addEventListener('click', startOverSession);
     elements.reviewMissedBtn?.addEventListener('click', reviewMissedQuestions);
   };
@@ -340,6 +343,7 @@ const QuizApp = (() => {
     const choiceBAliases = ['choiceb', 'choice_b', 'b', 'answerb'];
     const choiceCAliases = ['choicec', 'choice_c', 'c', 'answerc'];
     const choiceDAliases = ['choiced', 'choice_d', 'd', 'answerd'];
+    const choiceEAliases = ['choicee', 'choice_e', 'e', 'answere'];
     const correctAliases = ['correctchoice', 'correct', 'answer', 'correctanswer'];
     const categoryAliases = ['system', 'subcategory', 'sub', 'subcat', 'category', 'categoryid'];
     const difficultyAliases = ['difficulty', 'level'];
@@ -356,6 +360,7 @@ const QuizApp = (() => {
         choice_b: pickByAliases(row, choiceBAliases),
         choice_c: pickByAliases(row, choiceCAliases),
         choice_d: pickByAliases(row, choiceDAliases),
+        choice_e: pickByAliases(row, choiceEAliases),
         correct_choice: pickByAliases(row, correctAliases),
         category: pickByAliases(row, categoryAliases),
         difficulty: pickByAliases(row, difficultyAliases),
@@ -421,11 +426,26 @@ const QuizApp = (() => {
     const fallbackId = `q-${index + 1}`;
     const toDisplay = (value, fallback) =>
       value === undefined || value === null || value === '' ? fallback : String(value);
-    const normalizeChoice = (value, placeholder) =>
-      value === undefined || value === null || value === '' ? placeholder : String(value);
+    const normalizeText = (value, placeholder) => {
+      if (value === undefined || value === null || value === '') return placeholder;
+      // Replace newlines with spaces, then collapse multiple spaces.
+      const str = String(value).replace(/\s+/g, ' ').trim();
+      return str || placeholder;
+    };
+    const normalizeChoice = (value, placeholder) => {
+      if (value === undefined || value === null || value === '') return placeholder;
+      const str = String(value).replace(/\s+/g, ' ').trim();
+      return str || placeholder;
+    };
+    const rawChoice = (value) => {
+      if (value === undefined || value === null) return '';
+      return String(value).replace(/\s+/g, ' ').trim();
+    };
 
-    const correct = (item.correct_choice || '').toString().trim().toUpperCase();
-    const validCorrect = ['A', 'B', 'C', 'D'].includes(correct) ? correct : null;
+    const rawCorrect = (item.correct_choice || item.correctChoice || '').toString().trim().toUpperCase();
+    const correctMatches = rawCorrect.match(/[A-E]/g) || [];
+    const validCorrectChoices = Array.from(new Set(correctMatches.filter((letter) => ['A', 'B', 'C', 'D', 'E'].includes(letter))));
+    const validCorrect = validCorrectChoices[0] || null;
     const fillRaw = item.fill_in_blank ?? item.fillInBlank ?? item.fill_blank ?? item.fill;
     const fillFlag = (fillRaw || '').toString().trim();
     const isFillBlank = fillFlag === '1' || fillFlag.toLowerCase() === 'true';
@@ -435,23 +455,50 @@ const QuizApp = (() => {
     if (openFlag === '1' || openFlag === 'true') isOpenBook = true;
     if (openFlag === '0' || openFlag === 'false') isOpenBook = false;
 
-    return {
+    const candidateChoices = {
+      A: rawChoice(item.choice_a),
+      B: rawChoice(item.choice_b),
+      C: rawChoice(item.choice_c),
+      D: rawChoice(item.choice_d),
+      E: rawChoice(item.choice_e ?? item.choiceE ?? item.choicee),
+    };
+    const tfValues = ['true', 'false'];
+    const providedTf = Object.values(candidateChoices)
+      .map((v) => v.toLowerCase())
+      .filter((v) => v);
+    const isTrueFalseCandidate =
+      providedTf.length === 2 &&
+      new Set(providedTf).size === 2 &&
+      providedTf.every((v) => tfValues.includes(v));
+
+    const normalizedChoices = {
       id: toDisplay(item.id, fallbackId),
       question: toDisplay(item.question, `Question ${index + 1}`),
       choices: {
-        A: normalizeChoice(item.choice_a, 'Choice A not provided'),
-        B: normalizeChoice(item.choice_b, 'Choice B not provided'),
-        C: normalizeChoice(item.choice_c, 'Choice C not provided'),
-        D: normalizeChoice(item.choice_d, 'Choice D not provided'),
+        A: normalizeChoice(candidateChoices.A, 'Choice A not provided'),
+        B: normalizeChoice(candidateChoices.B, 'Choice B not provided'),
+        C: normalizeChoice(candidateChoices.C, 'Choice C not provided'),
+        D: normalizeChoice(candidateChoices.D, 'Choice D not provided'),
+        E: normalizeChoice(candidateChoices.E, ''),
       },
       correctChoice: validCorrect,
+      correctChoices: validCorrectChoices,
       category: toDisplay(item.category, 'Uncategorized'),
       difficulty: toDisplay(item.difficulty, 'Unspecified'),
       reference: toDisplay(item.reference, ''),
       isFillBlank,
       fillAnswer: '',
       isOpenBook,
+      isTrueFalse: isTrueFalseCandidate,
     };
+
+    if (normalizedChoices.isTrueFalse) {
+      normalizedChoices.choices.C = '';
+      normalizedChoices.choices.D = '';
+      normalizedChoices.choices.E = '';
+    }
+
+    return normalizedChoices;
   };
 
   const parseAnswerCsv = (csvText) => {
@@ -505,50 +552,139 @@ const QuizApp = (() => {
       answerMap.get(key).push(ans);
     });
 
-    const letters = ['A', 'B', 'C', 'D'];
+    const letters = ['A', 'B', 'C', 'D', 'E'];
+    const normalizeAnswerText = (text) => {
+      if (text === undefined || text === null) return '';
+      return String(text).replace(/\s+/g, ' ').trim();
+    };
+    const isTrueFalseAnswers = (answers) => {
+      const cleaned = answers
+        .filter((ans) => ans && ans.answerText !== undefined && ans.answerText !== null)
+        .map((ans) => ans.answerText.toString().trim().toLowerCase())
+        .filter((text) => text);
+      if (!cleaned.length) return false;
+      const unique = new Set(cleaned);
+      const allowed = new Set(['true', 'false']);
+      return unique.size === 2 && cleaned.every((text) => allowed.has(text)) && allowed.has('true') && allowed.has('false');
+    };
 
     return questions.map((q) => {
       const list = answerMap.get(q.id) || [];
       if (!list.length) return q;
 
       if (q.isFillBlank) {
-        const corrects = list.filter((a) => a.isCorrect).map((a) => a.answerText).filter(Boolean);
-        const fillAnswer = corrects.length ? corrects.join(' / ') : (list[0]?.answerText || '');
+        const corrects = list
+          .filter((a) => a.isCorrect)
+          .map((a) => normalizeAnswerText(a.answerText))
+          .filter(Boolean);
+        const fillAnswer = corrects.length
+          ? corrects.join(' / ')
+          : normalizeAnswerText(list[0]?.answerText || '');
         return {
           ...q,
           fillAnswer,
           correctChoice: null,
+          correctChoices: [],
           choices: q.choices,
         };
       }
 
        const correctIndex = list.findIndex((a) => a.isCorrect);
 
-      // Take first four; if the correct answer is beyond the first four, ensure it is included.
-      let top = list.slice(0, 4);
-      if (correctIndex >= 4) {
+      // Take first five; if the correct answer is beyond the first five, ensure it is included.
+      let top = list.slice(0, 5);
+      if (correctIndex >= 5) {
         top = [...top];
         top[top.length - 1] = list[correctIndex]; // replace last slot with correct answer
       }
 
       const updatedChoices = { ...q.choices };
-      let derivedCorrect = q.correctChoice;
+      const derivedCorrectChoices = new Set(
+        (q.correctChoices && q.correctChoices.length ? q.correctChoices : q.correctChoice ? [q.correctChoice] : []).map(
+          (c) => c.toUpperCase(),
+        ),
+      );
 
       letters.forEach((letter, idx) => {
         const ans = top[idx];
+        const normalizedText = ans && ans.answerText ? normalizeAnswerText(ans.answerText) : '';
         updatedChoices[letter] =
-          ans && ans.answerText ? ans.answerText : q.choices[letter] || `Choice ${letter} not provided`;
+          normalizedText || q.choices[letter] || `Choice ${letter} not provided`;
         if (ans && ans.isCorrect) {
-          derivedCorrect = letter;
+          derivedCorrectChoices.add(letter);
         }
       });
+
+      const correctChoicesArray = Array.from(derivedCorrectChoices);
+      const isTrueFalse = isTrueFalseAnswers(top);
+      if (isTrueFalse) {
+        updatedChoices.C = '';
+        updatedChoices.D = '';
+        updatedChoices.E = '';
+      }
 
       return {
         ...q,
         choices: updatedChoices,
-        correctChoice: derivedCorrect,
+        correctChoice: correctChoicesArray[0] || null,
+        correctChoices: correctChoicesArray,
+        isTrueFalse: q.isTrueFalse || isTrueFalse,
       };
     });
+  };
+
+  const getCorrectChoices = (question) => {
+    if (!question || question.isFillBlank) return [];
+    if (Array.isArray(question.correctChoices) && question.correctChoices.length) {
+      return question.correctChoices.map((c) => String(c).toUpperCase());
+    }
+    if (question.correctChoice) {
+      return [String(question.correctChoice).toUpperCase()];
+    }
+    return [];
+  };
+
+  const isMultiSelectQuestion = (question) => getCorrectChoices(question).length > 1;
+
+  const evaluateChoiceResponse = (question, selectedChoices) => {
+    const correctChoices = getCorrectChoices(question);
+    if (!correctChoices.length) return false;
+    const selectedSet = new Set((selectedChoices || []).map((c) => String(c).toUpperCase()));
+    const correctSet = new Set(correctChoices.map((c) => String(c).toUpperCase()));
+    if (selectedSet.size !== correctSet.size) return false;
+    for (const choice of correctSet) {
+      if (!selectedSet.has(choice)) return false;
+    }
+    return true;
+  };
+
+  const evaluateFillResponse = (question, fillText) => {
+    if (!question || !question.fillAnswer) return false;
+    const submitted = (fillText || '').trim().toLowerCase();
+    if (!submitted) return false;
+    const answers = question.fillAnswer
+      .split('/')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    return answers.some((ans) => submitted === ans);
+  };
+
+  const toggleManualCredit = () => {
+    const question = state.filteredQuestions[state.currentIndex];
+    if (!question || !question.isFillBlank) return;
+    const entry = state.answers[question.id];
+    if (!entry || !entry.revealed) return;
+    const fillText = entry.fillText || '';
+    const autoCorrect = evaluateFillResponse(question, fillText);
+    const manualCorrect = !(entry.manualCorrect === true);
+    const updated = {
+      ...entry,
+      manualCorrect,
+      isCorrect: manualCorrect ? true : autoCorrect,
+    };
+    state.answers[question.id] = updated;
+    revealAnswer(question, updated);
+    updateSummary();
   };
 
   const setSelectOptions = (select, options, label) => {
@@ -848,6 +984,15 @@ const QuizApp = (() => {
   const openPrintableTest = (questions) => {
     const win = window.open('', '_blank');
     if (!win) return;
+    const printableChoices = (q) => {
+      const letters = ['A', 'B', 'C', 'D', 'E'].filter((letter) => {
+        if (q.isTrueFalse && (letter === 'C' || letter === 'D')) return false;
+        if (q.isTrueFalse && letter === 'E') return false;
+        const text = q.choices?.[letter];
+        return text !== undefined && text !== null && String(text).trim() !== '';
+      });
+      return letters.map((letter) => `<li>${letter}) ${q.choices[letter]}</li>`).join('');
+    };
     const html = `
       <html>
       <head>
@@ -872,12 +1017,7 @@ const QuizApp = (() => {
                 ${
                   q.isFillBlank
                     ? '<p>______________________________</p>'
-                    : `<ul>
-                        <li>A) ${q.choices.A}</li>
-                        <li>B) ${q.choices.B}</li>
-                        <li>C) ${q.choices.C}</li>
-                        <li>D) ${q.choices.D}</li>
-                      </ul>`
+                    : `<ul>${printableChoices(q)}</ul>`
                 }
               </div>
             `,
@@ -1097,6 +1237,7 @@ const QuizApp = (() => {
     elements.answerText.classList.remove('correct', 'incorrect');
     elements.referenceText.textContent = '';
     elements.referenceText.classList.add('hidden');
+    elements.markCorrectBtn?.classList.add('hidden');
     elements.choicesForm
       .querySelectorAll('.choice')
       .forEach((choice) => choice.classList.remove('correct', 'incorrect'));
@@ -1130,7 +1271,7 @@ const QuizApp = (() => {
     if (!question) {
       elements.questionText.textContent =
         'No questions match these filters. Adjust the category/book filters or reset filters.';
-      setChoiceText(['-', '-', '-', '-']);
+      setChoiceText(['-', '-', '-', '-', '-']);
       setChoiceInputsDisabled(true);
       elements.answerReveal.classList.add('hidden');
       elements.questionCategory.textContent = 'Category';
@@ -1144,6 +1285,7 @@ const QuizApp = (() => {
     }
 
     const isFill = question.isFillBlank;
+    const isMulti = isMultiSelectQuestion(question);
     if (isFill) {
       elements.fillContainer.classList.remove('hidden');
       elements.choicesForm.classList.add('hidden');
@@ -1152,13 +1294,16 @@ const QuizApp = (() => {
       elements.choicesForm.classList.remove('hidden');
     }
 
+    setChoiceInputType(isMulti ? 'checkbox' : 'radio');
+    updateChoiceVisibility(question);
     setChoiceInputsDisabled(false);
     elements.questionText.textContent = question.question || 'Question text missing.';
     setChoiceText([
-      question.choices.A || 'Choice A not provided',
-      question.choices.B || 'Choice B not provided',
-      question.choices.C || 'Choice C not provided',
-      question.choices.D || 'Choice D not provided',
+      question.choices.A ?? 'Choice A not provided',
+      question.choices.B ?? 'Choice B not provided',
+      question.choices.C ?? '',
+      question.choices.D ?? '',
+      question.choices.E ?? '',
     ]);
 
     elements.questionCategory.textContent = question.category || 'Uncategorized';
@@ -1166,11 +1311,19 @@ const QuizApp = (() => {
 
     const saved = state.answers[question.id] || {
       selectedChoice: null,
+      selectedChoices: [],
       isCorrect: false,
       revealed: false,
+      manualCorrect: false,
       fillText: '',
     };
-    setSelectedChoice(saved.selectedChoice);
+    const savedChoices =
+      saved.selectedChoices && saved.selectedChoices.length
+        ? saved.selectedChoices
+        : saved.selectedChoice
+          ? [saved.selectedChoice]
+          : [];
+    setSelectedChoices(savedChoices);
     if (isFill) {
       elements.fillInput.value = saved.fillText || '';
     } else {
@@ -1223,39 +1376,89 @@ const QuizApp = (() => {
   };
 
   const setChoiceText = (texts) => {
-    elements.choiceAText.textContent = texts[0];
-    elements.choiceBText.textContent = texts[1];
-    elements.choiceCText.textContent = texts[2];
-    elements.choiceDText.textContent = texts[3];
+    const clean = (val) => {
+      if (val === undefined || val === null) return '';
+      return String(val).replace(/\s+/g, ' ').trim();
+    };
+    elements.choiceAText.textContent = clean(texts[0]);
+    elements.choiceBText.textContent = clean(texts[1]);
+    elements.choiceCText.textContent = clean(texts[2]);
+    elements.choiceDText.textContent = clean(texts[3]);
+    elements.choiceEText.textContent = clean(texts[4]);
+  };
+
+  const getChoiceInputs = () => Array.from(elements.choicesForm.querySelectorAll('input[name="choice"]'));
+
+  const getChoiceElements = () => ({
+    A: elements.choicesForm.querySelector('[data-choice="A"]'),
+    B: elements.choicesForm.querySelector('[data-choice="B"]'),
+    C: elements.choicesForm.querySelector('[data-choice="C"]'),
+    D: elements.choicesForm.querySelector('[data-choice="D"]'),
+    E: elements.choicesForm.querySelector('[data-choice="E"]'),
+  });
+
+  const setChoiceInputType = (type) => {
+    getChoiceInputs().forEach((input) => {
+      if (input.type !== type) {
+        input.checked = false;
+        input.type = type;
+      }
+    });
+  };
+
+  const updateChoiceVisibility = (question) => {
+    const choiceEls = getChoiceElements();
+    const isTrueFalse = question?.isTrueFalse;
+    ['A', 'B', 'C', 'D', 'E'].forEach((letter) => {
+      const el = choiceEls[letter];
+      if (!el) return;
+      const choiceText = question?.choices?.[letter];
+      const normalized = choiceText !== undefined && choiceText !== null ? String(choiceText).trim() : '';
+      const hasText = normalized !== '';
+      const isPlaceholder = normalized.toLowerCase().startsWith('choice') && normalized.toLowerCase().endsWith('not provided');
+      const shouldHide =
+        (isTrueFalse && (letter === 'C' || letter === 'D' || letter === 'E')) || !hasText || isPlaceholder;
+      el.classList.toggle('hidden', !!shouldHide);
+      const input = el.querySelector('input[name="choice"]');
+      if (shouldHide && input) {
+        input.checked = false;
+      }
+    });
   };
 
   const setChoiceInputsDisabled = (disabled) => {
-    elements.choicesForm.querySelectorAll('input[type="radio"]').forEach((input) => {
+    getChoiceInputs().forEach((input) => {
       input.disabled = disabled;
-      input.checked = false;
+      if (disabled) input.checked = false;
     });
   };
 
-  const setSelectedChoice = (choice) => {
-    elements.choicesForm.querySelectorAll('input[type="radio"]').forEach((input) => {
-      input.checked = input.value === choice;
+  const setSelectedChoices = (choices) => {
+    const normalized = new Set((choices || []).map((c) => String(c).toUpperCase()));
+    getChoiceInputs().forEach((input) => {
+      input.checked = normalized.has(input.value.toUpperCase());
     });
   };
+
+  const getSelectedChoicesFromForm = () =>
+    getChoiceInputs()
+      .filter((input) => input.checked)
+      .map((input) => input.value.toUpperCase());
 
   const handleAnswerChange = (event) => {
     if (state.currentMode === 'test') return;
     if (event.target.name !== 'choice') return;
     const question = state.filteredQuestions[state.currentIndex];
     if (!question) return;
-    const selectedChoice = event.target.value;
-    const isCorrect = question.correctChoice
-      ? selectedChoice.toUpperCase() === question.correctChoice
-      : false;
+    const selectedChoices = getSelectedChoicesFromForm();
+    const isCorrect = evaluateChoiceResponse(question, selectedChoices);
 
     state.answers[question.id] = {
       ...(state.answers[question.id] || {}),
-      selectedChoice,
+      selectedChoice: selectedChoices[0] || null,
+      selectedChoices,
       isCorrect,
+      manualCorrect: false,
       revealed: false,
     };
 
@@ -1269,15 +1472,13 @@ const QuizApp = (() => {
     const question = state.filteredQuestions[state.currentIndex];
     if (!question || !question.isFillBlank) return;
     const fillText = event.target.value || '';
-    const isCorrect =
-      question.fillAnswer && fillText.trim().length
-        ? fillText.trim().toLowerCase() === question.fillAnswer.trim().toLowerCase()
-        : false;
+    const isCorrect = evaluateFillResponse(question, fillText);
 
     state.answers[question.id] = {
       ...(state.answers[question.id] || {}),
       fillText,
       isCorrect,
+      manualCorrect: false,
       revealed: false,
     };
     resetAnswerReveal();
@@ -1290,7 +1491,13 @@ const QuizApp = (() => {
     if (question.isFillBlank) {
       return !!entry.fillText && entry.fillText.trim() !== '';
     }
-    return !!entry.selectedChoice;
+    const selectedChoices =
+      entry.selectedChoices && entry.selectedChoices.length
+        ? entry.selectedChoices
+        : entry.selectedChoice
+          ? [entry.selectedChoice]
+          : [];
+    return selectedChoices.length > 0;
   };
 
   const getSessionStats = (pool) => {
@@ -1321,9 +1528,10 @@ const QuizApp = (() => {
     if (state.currentMode === 'test') return;
     const question = state.filteredQuestions[state.currentIndex];
     if (!question) return;
-    const existing = state.answers[question.id] || { selectedChoice: null, fillText: '' };
+    const existing = state.answers[question.id] || { selectedChoice: null, selectedChoices: [], fillText: '' };
     const isLast = state.currentIndex >= state.filteredQuestions.length - 1;
     let selectedChoice = existing.selectedChoice;
+    let selectedChoices = existing.selectedChoices || [];
     let fillText = existing.fillText || '';
     let isCorrect = false;
 
@@ -1333,24 +1541,27 @@ const QuizApp = (() => {
         showError('Enter an answer before submitting.');
         return;
       }
-      isCorrect =
-        question.fillAnswer && fillText.trim().length
-          ? fillText.trim().toLowerCase() === question.fillAnswer.trim().toLowerCase()
-          : false;
+      isCorrect = evaluateFillResponse(question, fillText);
     } else {
-      const checked = elements.choicesForm.querySelector('input[name="choice"]:checked');
-      selectedChoice = checked ? checked.value : selectedChoice;
-      if (!selectedChoice) {
+      selectedChoices = getSelectedChoicesFromForm();
+      selectedChoice = selectedChoices[0] || selectedChoice;
+      if (!selectedChoices.length) {
         showError('Select an answer before submitting.');
         return;
       }
-      isCorrect = question.correctChoice
-        ? selectedChoice.toUpperCase() === question.correctChoice
-        : false;
+      isCorrect = evaluateChoiceResponse(question, selectedChoices);
     }
 
     clearError();
-    const updated = { ...existing, selectedChoice, fillText, isCorrect, revealed: true };
+    const updated = {
+      ...existing,
+      selectedChoice,
+      selectedChoices,
+      fillText,
+      isCorrect,
+      manualCorrect: false,
+      revealed: true,
+    };
     state.answers[question.id] = updated;
     revealAnswer(question, updated);
     elements.submitAnswerBtn.classList.add('hidden');
@@ -1365,30 +1576,48 @@ const QuizApp = (() => {
 
   const formatChoiceLabel = (question, letter) => {
     if (!letter) return '';
-    const text = question.choices?.[letter] || '';
+    const raw = question.choices?.[letter] || '';
+    const text = raw ? raw.toString().replace(/\s+/g, ' ').trim() : '';
     return text ? `${letter}) ${text}` : `${letter})`;
+  };
+
+  const formatChoiceList = (question, letters) => {
+    const normalized = (letters || []).map((c) => String(c).toUpperCase());
+    const ordered = ['A', 'B', 'C', 'D', 'E'].filter((letter) => normalized.includes(letter));
+    if (!ordered.length) return '(no response)';
+    return ordered.map((letter) => formatChoiceLabel(question, letter)).join(', ');
   };
 
   const revealAnswer = (question, answerState) => {
     resetAnswerReveal();
 
     const selectedChoice = answerState.selectedChoice || null;
-    const correctChoice = question.correctChoice || null;
+    const selectedChoices =
+      answerState.selectedChoices && answerState.selectedChoices.length
+        ? answerState.selectedChoices.map((c) => c.toUpperCase())
+        : selectedChoice
+          ? [selectedChoice.toUpperCase()]
+          : [];
+    const correctChoices = getCorrectChoices(question);
+    const correctChoice = correctChoices[0] || null;
+    const correctSet = new Set(correctChoices);
+    const selectedSet = new Set(selectedChoices);
+    const isManual = !!answerState.manualCorrect;
+    const isCorrect = !!answerState.isCorrect;
 
     if (!question.isFillBlank) {
       elements.choicesForm.querySelectorAll('.choice').forEach((choiceEl) => {
         const letter = choiceEl.dataset.choice;
-        if (letter === correctChoice) {
+        if (correctSet.has(letter)) {
           choiceEl.classList.add('correct');
         }
-        if (selectedChoice && letter === selectedChoice && selectedChoice !== correctChoice) {
+        if (selectedSet.has(letter) && !correctSet.has(letter)) {
           choiceEl.classList.add('incorrect');
         }
       });
     }
 
-    const isCorrect = !!answerState.isCorrect;
-    elements.resultText.textContent = isCorrect ? 'Correct!' : 'Incorrect';
+    elements.resultText.textContent = isCorrect ? (isManual ? 'Marked correct' : 'Correct!') : 'Incorrect';
     elements.resultText.classList.add(isCorrect ? 'correct' : 'incorrect');
 
     if (question.isFillBlank) {
@@ -1399,13 +1628,20 @@ const QuizApp = (() => {
       elements.userAnswerText.classList.add(isCorrect ? 'correct' : 'incorrect');
       elements.answerText.textContent = `Correct answer: ${question.fillAnswer || 'N/A'}`;
       elements.answerText.classList.add('correct');
+      if (elements.markCorrectBtn) {
+        elements.markCorrectBtn.classList.remove('hidden');
+        elements.markCorrectBtn.textContent = isManual ? 'Unmark correct' : 'Mark as correct';
+      }
     } else {
-      const userLabel = selectedChoice ? formatChoiceLabel(question, selectedChoice) : '(no response)';
-      const correctLabel = correctChoice ? formatChoiceLabel(question, correctChoice) : 'N/A';
+      const userLabel = formatChoiceList(question, Array.from(selectedSet));
+      const correctLabel = correctChoices.length ? formatChoiceList(question, correctChoices) : 'N/A';
       elements.userAnswerText.textContent = `Your answer: ${userLabel}`;
       elements.userAnswerText.classList.add(isCorrect ? 'correct' : 'incorrect');
       elements.answerText.textContent = `Correct answer: ${correctLabel}`;
       elements.answerText.classList.add('correct');
+      if (elements.markCorrectBtn) {
+        elements.markCorrectBtn.classList.add('hidden');
+      }
     }
 
     if (question.reference) {
