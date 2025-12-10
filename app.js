@@ -10,6 +10,7 @@
  *    the question file (JSON/CSV) and optional answer CSV, then click "Load Questions".
  *
  * All data stays in memory; nothing is sent over the network or stored.
+ * NOTE: The app now loads embedded CSV data from embeddedData.js at startup (no upload needed).
  */
 const QuizApp = (() => {
   const state = {
@@ -22,13 +23,17 @@ const QuizApp = (() => {
       shuffle: false,
     },
     testMode: {
-      bookMode: 'all', // all | open | closed
+      bookMode: null, // null | open | closed
       category: 'all',
       shuffle: false,
-      genMode: 'auto',
+      genMode: 'manual',
+      questionCount: null,
+      distribution: 'random', // random | even
     },
     currentMode: null, // null | 'study' | 'test'
     manualSelection: new Set(),
+    sessionBaseQuestions: [],
+    reviewMode: false,
   };
 
   const elements = {};
@@ -36,7 +41,7 @@ const QuizApp = (() => {
   const init = () => {
     cacheElements();
     wireEvents();
-    renderLoadState();
+    loadEmbeddedBank();
   };
 
   const cacheElements = () => {
@@ -69,13 +74,24 @@ const QuizApp = (() => {
     elements.testCategorySelect = document.getElementById('testCategorySelect');
     elements.testShuffleToggle = document.getElementById('testShuffleToggle');
     elements.generateTestBtn = document.getElementById('generateTestBtn');
+    elements.generateListBtn = document.getElementById('generateListBtn');
     elements.resetTestBtn = document.getElementById('resetTestBtn');
     elements.toModeFromTest = document.getElementById('toModeFromTest');
+    elements.questionCountInput = document.getElementById('questionCountInput');
+    elements.distributionSelect = document.getElementById('distributionSelect');
+    elements.autoGroups = Array.from(document.querySelectorAll('.auto-group'));
     elements.manualPanel = document.getElementById('manualTestPanel');
     elements.manualList = document.getElementById('manualList');
     elements.manualCategorySelect = document.getElementById('manualCategorySelect');
     elements.selectAllManual = document.getElementById('selectAllManual');
     elements.clearManual = document.getElementById('clearManual');
+    elements.manualSelectionCount = document.getElementById('manualSelectionCount');
+    elements.questionListPanel = document.getElementById('questionListPanel');
+    elements.questionList = document.getElementById('questionList');
+    elements.questionListCount = document.getElementById('questionListCount');
+    elements.testTypePrompt = document.getElementById('testTypePrompt');
+    elements.chooseOpenBtn = document.getElementById('chooseOpenBtn');
+    elements.chooseClosedBtn = document.getElementById('chooseClosedBtn');
 
     elements.summaryBar = document.getElementById('summaryBar');
     elements.answeredCount = document.getElementById('answeredCount');
@@ -93,19 +109,28 @@ const QuizApp = (() => {
     elements.fillContainer = document.getElementById('fillContainer');
     elements.fillInput = document.getElementById('fillInput');
     elements.answerReveal = document.getElementById('answerReveal');
+    elements.resultText = document.getElementById('resultText');
+    elements.userAnswerText = document.getElementById('userAnswerText');
     elements.answerText = document.getElementById('answerText');
     elements.referenceText = document.getElementById('referenceText');
+    elements.sessionSummary = document.getElementById('sessionSummary');
+    elements.summaryPercent = document.getElementById('summaryPercent');
+    elements.summaryDetails = document.getElementById('summaryDetails');
+    elements.startOverBtn = document.getElementById('startOverBtn');
+    elements.reviewMissedBtn = document.getElementById('reviewMissedBtn');
 
-    elements.showAnswerBtn = document.getElementById('showAnswerBtn');
+    elements.submitAnswerBtn = document.getElementById('submitAnswerBtn');
     elements.prevBtn = document.getElementById('prevBtn');
     elements.nextBtn = document.getElementById('nextBtn');
+    elements.skipToSummaryBtn = document.getElementById('skipToSummaryBtn');
+    elements.actions = document.querySelector('.actions');
   };
 
   const wireEvents = () => {
-    elements.fileInput.addEventListener('change', handleFileSelected);
-    elements.answerFileInput.addEventListener('change', clearError);
-    elements.loadBtn.addEventListener('click', handleLoadClick);
-    elements.backToFilesBtn.addEventListener('click', renderLoadState);
+    if (elements.fileInput) elements.fileInput.addEventListener('change', handleFileSelected);
+    if (elements.answerFileInput) elements.answerFileInput.addEventListener('change', clearError);
+    if (elements.loadBtn) elements.loadBtn.addEventListener('click', handleLoadClick);
+    if (elements.backToFilesBtn) elements.backToFilesBtn.addEventListener('click', renderLoadState);
     elements.studyModeBtn.addEventListener('click', enterStudyMode);
     elements.testModeBtn.addEventListener('click', enterTestMode);
 
@@ -121,14 +146,13 @@ const QuizApp = (() => {
 
     elements.bookModeRadios.forEach((r) =>
       r.addEventListener('change', (e) => {
-        state.testMode.bookMode = e.target.value;
-        renderManualList();
+        handleTestTypeSelection(e.target.value);
       }),
     );
     elements.genModeRadios.forEach((r) =>
       r.addEventListener('change', (e) => {
         state.testMode.genMode = e.target.value;
-        renderManualList();
+        updateGenerationModeUI();
       }),
     );
     elements.testShuffleToggle.addEventListener('change', (e) => {
@@ -137,19 +161,44 @@ const QuizApp = (() => {
     elements.testCategorySelect.addEventListener('change', (e) => {
       state.testMode.category = e.target.value;
       renderManualList();
+      updateDistributionAvailability();
+      updateQuestionCountHint();
+      updateGenerateTestAvailability();
+    });
+    elements.questionCountInput.addEventListener('change', () => {
+      state.testMode.questionCount = parseQuestionCount();
+      updateGenerateTestAvailability();
+    });
+    elements.distributionSelect.addEventListener('change', (e) => {
+      state.testMode.distribution = e.target.value;
+      updateDistributionAvailability();
     });
     elements.manualCategorySelect.addEventListener('change', renderManualList);
+    elements.chooseOpenBtn.addEventListener('click', () => handleTestTypeSelection('open'));
+    elements.chooseClosedBtn.addEventListener('click', () => handleTestTypeSelection('closed'));
     elements.selectAllManual.addEventListener('click', selectAllManualVisible);
     elements.clearManual.addEventListener('click', clearManualSelection);
     elements.generateTestBtn.addEventListener('click', generateTest);
+    elements.generateListBtn.addEventListener('click', generateQuestionList);
     elements.resetTestBtn.addEventListener('click', () => {
-      state.testMode = { bookMode: 'all', category: 'all', shuffle: false, genMode: 'auto' };
+      state.testMode = {
+        bookMode: null,
+        category: 'all',
+        shuffle: false,
+        genMode: 'manual',
+        questionCount: null,
+        distribution: 'random',
+      };
       state.manualSelection = new Set();
-      elements.bookModeRadios.forEach((r) => (r.checked = r.value === 'all'));
-      elements.genModeRadios.forEach((r) => (r.checked = r.value === 'auto'));
+      elements.bookModeRadios.forEach((r) => (r.checked = false));
+      elements.genModeRadios.forEach((r) => (r.checked = r.value === 'manual'));
       elements.testCategorySelect.value = 'all';
       elements.testShuffleToggle.checked = false;
       elements.manualCategorySelect.value = 'all';
+      if (elements.questionCountInput) elements.questionCountInput.value = '';
+      if (elements.distributionSelect) elements.distributionSelect.value = 'random';
+      showTestTypePrompt();
+      updateGenerationModeUI();
       renderManualList();
       resetFilters();
     });
@@ -157,16 +206,19 @@ const QuizApp = (() => {
 
     elements.prevBtn.addEventListener('click', goToPreviousQuestion);
     elements.nextBtn.addEventListener('click', goToNextQuestion);
-    elements.showAnswerBtn.addEventListener('click', showCorrectAnswer);
+    elements.submitAnswerBtn.addEventListener('click', submitAnswer);
+    elements.skipToSummaryBtn?.addEventListener('click', showSessionSummary);
     elements.choicesForm.addEventListener('change', handleAnswerChange);
     elements.fillInput.addEventListener('input', handleFillInput);
+    elements.startOverBtn?.addEventListener('click', startOverSession);
+    elements.reviewMissedBtn?.addEventListener('click', reviewMissedQuestions);
   };
 
   const renderLoadState = () => {
-    elements.quizScreen.classList.add('hidden');
-    elements.modeScreen.classList.add('hidden');
-    elements.appHeader.classList.add('hidden');
-    elements.loadScreen.classList.remove('hidden');
+    elements.quizScreen?.classList.add('hidden');
+    elements.modeScreen?.classList.remove('hidden');
+    elements.appHeader?.classList.add('hidden');
+    elements.loadScreen?.classList.add('hidden');
     clearError();
   };
 
@@ -202,6 +254,37 @@ const QuizApp = (() => {
         console.error(err);
         showError('Could not read question/answer files. Check that these are valid JSON/CSV exports from Access.');
       });
+  };
+
+  const loadEmbeddedBank = () => {
+    try {
+      const questionText = (window.EMBEDDED_QUESTION_CSV || '').trim();
+      const answerText = (window.EMBEDDED_ANSWER_CSV || '').trim();
+      if (!questionText) {
+        showError('Embedded question data is missing.');
+        return;
+      }
+      const questions = parseQuestionBank('embedded.csv', questionText);
+      if (!questions.length) {
+        showError('The embedded question bank is empty.');
+        return;
+      }
+      const answers = answerText ? parseAnswerCsv(answerText) : [];
+      const mergedQuestions = mergeAnswersIntoQuestions(questions, answers);
+
+      state.allQuestions = mergedQuestions;
+      state.filteredQuestions = [...mergedQuestions];
+      state.sessionBaseQuestions = [...mergedQuestions];
+      state.currentIndex = 0;
+      state.answers = {};
+      state.reviewMode = false;
+      populateFilterOptions();
+      elements.loadScreen?.classList.add('hidden');
+      showModeSelection();
+    } catch (err) {
+      console.error(err);
+      showError('Failed to load embedded question data.');
+    }
   };
 
   const readFileAsText = (file) =>
@@ -468,41 +551,135 @@ const QuizApp = (() => {
     });
   };
 
+  const setSelectOptions = (select, options, label) => {
+    if (!select) return;
+    select.innerHTML = '';
+    const sorted = Array.from(options || [])
+      .filter((opt) => opt !== 'all')
+      .sort((a, b) => (a > b ? 1 : -1));
+    const ordered = ['all', ...sorted];
+    ordered.forEach((opt) => {
+      const optionEl = document.createElement('option');
+      optionEl.value = opt;
+      optionEl.textContent = opt === 'all' ? `All ${label}` : opt;
+      select.appendChild(optionEl);
+    });
+    select.value = 'all';
+  };
+
+  const getCategoriesForBookMode = (bookMode) => {
+    const categories = new Set(['all']);
+    state.allQuestions.forEach((q) => {
+      if (bookMode === 'open' && q.isOpenBook !== true) return;
+      if (bookMode === 'closed' && q.isOpenBook !== false) return;
+      categories.add(q.category || 'Uncategorized');
+    });
+    return categories;
+  };
+
+  const applyTestTypeCategories = (bookMode) => {
+    const categories = getCategoriesForBookMode(bookMode);
+    setSelectOptions(elements.testCategorySelect, categories, 'categories');
+    setSelectOptions(elements.manualCategorySelect, categories, 'categories');
+  };
+
+  const updateManualSelectionCount = () => {
+    if (!elements.manualSelectionCount) return;
+    const count = state.manualSelection ? state.manualSelection.size : 0;
+    elements.manualSelectionCount.textContent = `Selected: ${count}`;
+  };
+
+  const clearQuestionList = () => {
+    if (elements.questionList) elements.questionList.innerHTML = '';
+    if (elements.questionListPanel) elements.questionListPanel.classList.add('hidden');
+    if (elements.questionListCount) elements.questionListCount.textContent = '0';
+  };
+
+  const setBookModeRadiosLocked = (locked) => {
+    elements.bookModeRadios?.forEach((r) => {
+      r.disabled = locked;
+    });
+  };
+
+  const hasQuestionCount = () => {
+    if (!elements.questionCountInput) return false;
+    const raw = elements.questionCountInput.value;
+    if (!raw || !String(raw).trim()) return false;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0;
+  };
+
+  const parseQuestionCount = (maxAvailable = null) => {
+    if (!elements.questionCountInput) return null;
+    const raw = elements.questionCountInput.value;
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return maxAvailable !== null ? Math.min(parsed, maxAvailable) : parsed;
+  };
+
+  const updateDistributionAvailability = () => {
+    if (!elements.distributionSelect) return;
+    const categoryAll = (elements.testCategorySelect.value || 'all') === 'all';
+    elements.distributionSelect.disabled = !categoryAll;
+    if (!categoryAll) {
+      elements.distributionSelect.value = 'random';
+      state.testMode.distribution = 'random';
+    }
+  };
+
+  const updateQuestionCountHint = () => {
+    if (!elements.questionCountInput) return;
+    const poolSize = getTestPool().length;
+    elements.questionCountInput.max = poolSize || '';
+    elements.questionCountInput.placeholder = poolSize ? `Up to ${poolSize}` : 'Use all available';
+    if (!poolSize) {
+      elements.questionCountInput.value = '';
+      state.testMode.questionCount = null;
+    }
+    updateGenerateTestAvailability();
+  };
+
+  const updateGenerateTestAvailability = () => {
+    const isAuto = state.testMode.genMode === 'auto';
+    const needsCount = isAuto && !hasQuestionCount();
+    elements.generateTestBtn.disabled = !!needsCount;
+    if (elements.generateListBtn) elements.generateListBtn.disabled = !!needsCount;
+  };
+
   const populateFilterOptions = () => {
     const categories = new Set(['all']);
     state.allQuestions.forEach((q) => {
       categories.add(q.category || 'Uncategorized');
     });
 
-    const setOptions = (select, options, label) => {
-      select.innerHTML = '';
-      const sorted = Array.from(options).sort((a, b) => (a > b ? 1 : -1));
-      sorted.forEach((opt) => {
-        const optionEl = document.createElement('option');
-        optionEl.value = opt;
-        if (opt === 'all') {
-          optionEl.textContent = `All ${label}`;
-        } else {
-          optionEl.textContent = opt;
-        }
-        select.appendChild(optionEl);
-      });
-      select.value = 'all';
-    };
-
-    setOptions(elements.categoryFilter, categories, 'categories');
-    setOptions(elements.testCategorySelect, categories, 'categories');
-    setOptions(elements.manualCategorySelect, categories, 'categories');
+    setSelectOptions(elements.categoryFilter, categories, 'categories');
+    applyTestTypeCategories(null);
     elements.shuffleToggle.checked = false;
     state.filters = { category: 'all', bookMode: 'all', shuffle: false };
-    state.testMode = { bookMode: 'all', category: 'all', shuffle: false, genMode: 'auto' };
-    elements.bookModeRadios?.forEach((r) => (r.checked = r.value === 'all'));
-    elements.genModeRadios?.forEach((r) => (r.checked = r.value === 'auto'));
+    state.testMode = {
+      bookMode: null,
+      category: 'all',
+      shuffle: false,
+      genMode: 'manual',
+      questionCount: null,
+      distribution: 'random',
+    };
+    elements.bookModeRadios?.forEach((r) => (r.checked = false));
+    elements.genModeRadios?.forEach((r) => (r.checked = r.value === 'manual'));
     elements.testShuffleToggle.checked = false;
     elements.testCategorySelect.value = 'all';
     elements.studyBookSelect.value = 'all';
     elements.manualCategorySelect.value = 'all';
+    if (elements.questionCountInput) elements.questionCountInput.value = '';
+    if (elements.distributionSelect) {
+      elements.distributionSelect.value = 'random';
+      elements.distributionSelect.disabled = false;
+    }
     state.manualSelection = new Set();
+    showTestTypePrompt();
+    updateManualSelectionCount();
   };
 
   const applyFilters = () => {
@@ -528,6 +705,10 @@ const QuizApp = (() => {
 
     state.filteredQuestions = filtered;
     state.currentIndex = 0;
+    state.sessionBaseQuestions = [...filtered];
+    state.reviewMode = false;
+    state.answers = {};
+    hideSessionSummary();
     renderQuestion();
     updateSummary();
   };
@@ -538,55 +719,79 @@ const QuizApp = (() => {
     elements.studyBookSelect.value = 'all';
     state.filters = { category: 'all', bookMode: 'all', shuffle: false };
     state.filteredQuestions = state.allQuestions.length ? [...state.allQuestions] : [];
+    state.sessionBaseQuestions = [...state.filteredQuestions];
+    state.reviewMode = false;
+    state.currentIndex = 0;
+    state.answers = {};
+    hideSessionSummary();
+    renderQuestion();
+    updateSummary();
+  };
+
+  const buildSelection = () => {
+    if (!state.allQuestions.length) return null;
+    if (state.testMode.genMode === 'auto' && !hasQuestionCount()) {
+      showError('Enter the number of questions for auto generation.');
+      updateGenerateTestAvailability();
+      return null;
+    }
+    const bookMode = state.testMode.bookMode;
+    if (!bookMode) {
+      showError('Select Open or Closed book to generate a test.');
+      showTestTypePrompt();
+      return null;
+    }
+    const shuffle = state.testMode.shuffle;
+    const genMode = state.testMode.genMode || 'manual';
+    const base = getTestPool();
+    if (!base.length) {
+      showError('No questions match this book type/category selection.');
+      return null;
+    }
+
+    let selected = [];
+    if (genMode === 'manual') {
+      const manual = base.filter((q) => state.manualSelection.has(q.id));
+      if (!manual.length) {
+        showError('No manual questions selected. Check boxes to include questions.');
+        return null;
+      }
+      selected = shuffle ? shuffleArray(manual) : manual;
+    } else {
+      selected = buildAutoSelection(base);
+      if (!selected.length) {
+        showError('No questions available for auto generation with these settings.');
+        return null;
+      }
+    }
+
+    state.filteredQuestions = selected;
     state.currentIndex = 0;
     state.answers = {};
     renderQuestion();
     updateSummary();
+    return selected;
   };
 
   const generateTest = () => {
-    if (!state.allQuestions.length) return;
-    const bookMode = state.testMode.bookMode || 'all';
-    const category = elements.testCategorySelect.value || 'all';
-    const shuffle = state.testMode.shuffle;
-    const genMode = state.testMode.genMode || 'auto';
+    const selection = buildSelection();
+    if (!selection) return;
+    openPrintableTest(selection);
+  };
 
-    let base = state.allQuestions.filter((q) => {
-      const matchesCategory = category === 'all' || q.category === category;
-      let matchesBook = true;
-      if (bookMode === 'open') matchesBook = q.isOpenBook === true;
-      if (bookMode === 'closed') matchesBook = q.isOpenBook === false;
-      return matchesCategory && matchesBook;
-    });
-
-    if (genMode === 'manual') {
-      // Use manually selected IDs; fall back to none if empty.
-      base = base.filter((q) => state.manualSelection.has(q.id));
-      if (!base.length) {
-        showError('No manual questions selected. Check boxes to include questions.');
-        return;
-      }
-    } else if (shuffle) {
-      base = shuffleArray(base);
-    }
-
-    state.filteredQuestions = base;
-    state.currentIndex = 0;
-    state.answers = {};
-    renderQuestion();
-    updateSummary();
-
-    // Build printable test
-    openPrintableTest(base);
+  const generateQuestionList = () => {
+    const selection = buildSelection();
+    if (!selection) return;
+    renderQuestionList(selection);
   };
 
   const renderManualList = () => {
-    if (state.testMode.genMode !== 'manual' || !state.allQuestions.length) {
+    if (state.testMode.genMode !== 'manual' || !state.allQuestions.length || !state.testMode.bookMode) {
       elements.manualPanel.classList.add('hidden');
       return;
     }
     elements.manualPanel.classList.remove('hidden');
-    const bookMode = state.testMode.bookMode || 'all';
+    const bookMode = state.testMode.bookMode;
     const category = elements.manualCategorySelect.value || 'all';
     const filtered = state.allQuestions.filter((q) => {
       const matchesCategory = category === 'all' || q.category === category;
@@ -607,6 +812,7 @@ const QuizApp = (() => {
       checkbox.addEventListener('change', () => {
         if (checkbox.checked) state.manualSelection.add(q.id);
         else state.manualSelection.delete(q.id);
+        updateManualSelectionCount();
       });
       const body = document.createElement('div');
       const title = document.createElement('div');
@@ -620,6 +826,7 @@ const QuizApp = (() => {
       row.appendChild(body);
       elements.manualList.appendChild(row);
     });
+    updateManualSelectionCount();
   };
 
   const selectAllManualVisible = () => {
@@ -629,11 +836,13 @@ const QuizApp = (() => {
       const idAttr = row.dataset.qid;
       if (idAttr) state.manualSelection.add(idAttr);
     });
+    updateManualSelectionCount();
   };
 
   const clearManualSelection = () => {
     state.manualSelection = new Set();
     elements.manualList.querySelectorAll('input[type="checkbox"]').forEach((cb) => (cb.checked = false));
+    updateManualSelectionCount();
   };
 
   const openPrintableTest = (questions) => {
@@ -682,6 +891,85 @@ const QuizApp = (() => {
     win.document.close();
   };
 
+  const renderQuestionList = (questions) => {
+    if (!elements.questionList || !elements.questionListPanel) return;
+    if (!questions.length) {
+      elements.questionList.innerHTML = '<div class="item-meta">No questions to show.</div>';
+      elements.questionListCount.textContent = '0';
+      elements.questionListPanel.classList.remove('hidden');
+      return;
+    }
+    const html = questions
+      .map((q, idx) => {
+        const meta = `${q.category || 'Uncategorized'}${q.isOpenBook === true ? ' ? Open' : q.isOpenBook === false ? ' ? Closed' : ''}`;
+        return `
+          <div class="q-item">
+            <div class="item-title">${idx + 1}. ${q.question}</div>
+            <div class="item-meta">${meta}</div>
+          </div>
+        `;
+      })
+      .join('');
+    elements.questionList.innerHTML = html;
+    elements.questionListCount.textContent = String(questions.length);
+    elements.questionListPanel.classList.remove('hidden');
+  };
+
+  const showTestTypePrompt = () => {
+    state.testMode.bookMode = null;
+    state.testMode.category = 'all';
+    state.testMode.questionCount = null;
+    state.testMode.distribution = 'random';
+    state.manualSelection = new Set();
+    elements.bookModeRadios.forEach((r) => (r.checked = false));
+    setBookModeRadiosLocked(false);
+    applyTestTypeCategories(null);
+    if (elements.distributionSelect) elements.distributionSelect.value = 'random';
+    updateDistributionAvailability();
+    updateQuestionCountHint();
+    if (elements.questionCountInput) elements.questionCountInput.value = '';
+    elements.testTypePrompt.classList.remove('hidden');
+    elements.testControls.classList.add('hidden');
+    elements.manualPanel.classList.add('hidden');
+    updateManualSelectionCount();
+    clearQuestionList();
+  };
+
+  const handleTestTypeSelection = (type) => {
+    state.testMode.bookMode = type;
+    state.testMode.category = 'all';
+    state.testMode.questionCount = parseQuestionCount();
+    state.testMode.distribution = elements.distributionSelect?.value || 'random';
+    state.manualSelection = new Set();
+    elements.bookModeRadios.forEach((r) => (r.checked = r.value === type));
+    setBookModeRadiosLocked(true);
+    applyTestTypeCategories(type);
+    elements.testCategorySelect.value = 'all';
+    elements.manualCategorySelect.value = 'all';
+    updateDistributionAvailability();
+    updateQuestionCountHint();
+    elements.testTypePrompt.classList.add('hidden');
+    elements.testControls.classList.remove('hidden');
+    updateGenerationModeUI();
+    updateManualSelectionCount();
+    clearQuestionList();
+  };
+
+  const updateGenerationModeUI = () => {
+    const isAuto = state.testMode.genMode === 'auto';
+    elements.autoGroups?.forEach((el) => el.classList.toggle('hidden', !isAuto));
+    updateDistributionAvailability();
+    updateQuestionCountHint();
+    updateGenerateTestAvailability();
+    if (elements.generateTestBtn) {
+      elements.generateTestBtn.textContent = isAuto ? 'Generate Test PDF' : 'Generate Test';
+    }
+    renderManualList();
+    if (state.currentMode === 'test') {
+      renderQuestion();
+    }
+  };
+
   const showModeSelection = () => {
     state.currentMode = null;
     elements.appHeader.classList.add('hidden');
@@ -694,6 +982,7 @@ const QuizApp = (() => {
     elements.modeScreen.classList.add('hidden');
     elements.quizScreen.classList.remove('hidden');
     elements.appHeader.classList.remove('hidden');
+    elements.testTypePrompt.classList.add('hidden');
     elements.studyControls.classList.remove('hidden');
     elements.testControls.classList.add('hidden');
     applyFilters();
@@ -705,10 +994,19 @@ const QuizApp = (() => {
     elements.quizScreen.classList.remove('hidden');
     elements.appHeader.classList.remove('hidden');
     elements.studyControls.classList.add('hidden');
-    elements.testControls.classList.remove('hidden');
+    elements.testControls.classList.add('hidden');
+    showTestTypePrompt();
+    state.testMode.genMode = 'manual';
+    state.testMode.questionCount = null;
+    state.testMode.distribution = 'random';
+    elements.genModeRadios.forEach((r) => (r.checked = r.value === 'manual'));
+    if (elements.questionCountInput) elements.questionCountInput.value = '';
+    if (elements.distributionSelect) elements.distributionSelect.value = 'random';
     state.filteredQuestions = [];
     state.currentIndex = 0;
     state.answers = {};
+    updateGenerateTestAvailability();
+    updateGenerationModeUI();
     renderQuestion();
     updateSummary();
     renderManualList();
@@ -723,6 +1021,65 @@ const QuizApp = (() => {
     return shuffled;
   };
 
+  const getTestPool = () => {
+    if (!state.testMode.bookMode) return [];
+    const bookMode = state.testMode.bookMode;
+    const category = elements.testCategorySelect.value || 'all';
+    return state.allQuestions.filter((q) => {
+      const matchesCategory = category === 'all' || q.category === category;
+      let matchesBook = true;
+      if (bookMode === 'open') matchesBook = q.isOpenBook === true;
+      if (bookMode === 'closed') matchesBook = q.isOpenBook === false;
+      return matchesCategory && matchesBook;
+    });
+  };
+
+  const pickEvenDistribution = (pool, desiredCount) => {
+    const buckets = new Map();
+    pool.forEach((q) => {
+      const key = q.category || 'Uncategorized';
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(q);
+    });
+
+    const bucketLists = Array.from(buckets.values()).map((list) => shuffleArray(list));
+    const maxBuckets = bucketLists.length || 1;
+    const selected = [];
+    let idx = 0;
+
+    while (selected.length < desiredCount && bucketLists.some((b) => b.length)) {
+      const bucket = bucketLists[idx % maxBuckets];
+      if (bucket.length) {
+        selected.push(bucket.shift());
+      }
+      idx += 1;
+    }
+
+    return selected;
+  };
+
+  const buildAutoSelection = (pool) => {
+    const category = elements.testCategorySelect.value || 'all';
+    const maxAvailable = pool.length;
+    const desiredCount = parseQuestionCount(maxAvailable) ?? maxAvailable;
+    state.testMode.questionCount = desiredCount;
+    if (!maxAvailable) return [];
+
+    let selected = [];
+    const evenMode = state.testMode.distribution === 'even' && category === 'all';
+    if (evenMode) {
+      selected = pickEvenDistribution(pool, desiredCount);
+    } else {
+      const base = state.testMode.shuffle ? shuffleArray(pool) : pool;
+      selected = base.slice(0, desiredCount);
+    }
+
+    if (state.testMode.shuffle) {
+      selected = shuffleArray(selected);
+    }
+    return selected;
+  };
+
   const updateHeader = () => {
     const total = state.filteredQuestions.length;
     const current = total ? state.currentIndex + 1 : 0;
@@ -730,26 +1087,59 @@ const QuizApp = (() => {
     elements.progressText.textContent = `Question ${current} of ${total}`;
   };
 
+  const resetAnswerReveal = () => {
+    elements.answerReveal.classList.add('hidden');
+    elements.resultText.textContent = '';
+    elements.resultText.classList.remove('correct', 'incorrect');
+    elements.userAnswerText.textContent = '';
+    elements.userAnswerText.classList.remove('correct', 'incorrect');
+    elements.answerText.textContent = '';
+    elements.answerText.classList.remove('correct', 'incorrect');
+    elements.referenceText.textContent = '';
+    elements.referenceText.classList.add('hidden');
+    elements.choicesForm
+      .querySelectorAll('.choice')
+      .forEach((choice) => choice.classList.remove('correct', 'incorrect'));
+  };
+
+  const hideSessionSummary = () => {
+    elements.sessionSummary?.classList.add('hidden');
+    elements.questionCard?.classList.remove('hidden');
+    elements.actions?.classList.remove('hidden');
+    elements.summaryBar?.classList.remove('hidden');
+  };
+
   const renderQuestion = () => {
     updateHeader();
-    const question = state.filteredQuestions[state.currentIndex];
+    hideSessionSummary();
 
-    // Clear any previous correct highlights.
-    elements.choicesForm.querySelectorAll('.choice').forEach((choice) => {
-      choice.classList.remove('correct');
-    });
+    if (state.currentMode === 'test') {
+      renderTestModePlaceholder();
+      return;
+    }
+
+    elements.summaryBar.classList.remove('hidden');
+    elements.actions?.classList.remove('hidden');
+    elements.prevBtn.classList.remove('hidden');
+    elements.nextBtn.classList.add('hidden');
+    elements.submitAnswerBtn.classList.remove('hidden');
+    resetAnswerReveal();
+    elements.fillInput.disabled = false;
+    const question = state.filteredQuestions[state.currentIndex];
 
     if (!question) {
       elements.questionText.textContent =
         'No questions match these filters. Adjust the category/book filters or reset filters.';
-      setChoiceText(['—', '—', '—', '—']);
+      setChoiceText(['-', '-', '-', '-']);
       setChoiceInputsDisabled(true);
       elements.answerReveal.classList.add('hidden');
       elements.questionCategory.textContent = 'Category';
       elements.questionDifficulty.textContent = 'Difficulty';
       elements.prevBtn.disabled = true;
       elements.nextBtn.disabled = true;
-      elements.showAnswerBtn.disabled = true;
+      elements.submitAnswerBtn.disabled = true;
+      elements.submitAnswerBtn.classList.add('hidden');
+      elements.nextBtn.classList.add('hidden');
       return;
     }
 
@@ -788,14 +1178,48 @@ const QuizApp = (() => {
     }
 
     elements.prevBtn.disabled = state.currentIndex === 0;
-    elements.nextBtn.disabled = state.currentIndex >= state.filteredQuestions.length - 1;
-    elements.showAnswerBtn.disabled = false;
+    const isLast = state.currentIndex >= state.filteredQuestions.length - 1;
+    elements.submitAnswerBtn.disabled = false;
+
+    const isRevealed = !!saved.revealed;
+    if (isRevealed) {
+      elements.submitAnswerBtn.classList.add('hidden');
+      elements.nextBtn.classList.remove('hidden');
+      elements.nextBtn.disabled = isLast;
+    } else {
+      elements.submitAnswerBtn.classList.remove('hidden');
+      elements.nextBtn.classList.add('hidden');
+      elements.nextBtn.disabled = true;
+    }
 
     if (saved.revealed) {
       revealAnswer(question, saved);
     } else {
       elements.answerReveal.classList.add('hidden');
     }
+  };
+
+  const renderTestModePlaceholder = () => {
+    elements.summaryBar.classList.add('hidden');
+    elements.actions?.classList.add('hidden');
+    resetAnswerReveal();
+    elements.fillContainer.classList.add('hidden');
+    elements.choicesForm.classList.add('hidden');
+    setChoiceInputsDisabled(true);
+    elements.fillInput.value = '';
+    elements.fillInput.disabled = true;
+    elements.questionText.textContent = state.testMode.bookMode
+      ? 'Select questions from the list to include in the generated test, then click Generate Test.'
+      : 'Choose Open or Closed book to configure your test.';
+    elements.questionCategory.textContent = 'Test builder';
+    elements.questionDifficulty.textContent =
+      state.testMode.genMode === 'manual' ? 'Manual selection' : 'Auto selection';
+    elements.prevBtn.classList.add('hidden');
+    elements.nextBtn.classList.add('hidden');
+    elements.submitAnswerBtn.classList.add('hidden');
+    elements.prevBtn.disabled = true;
+    elements.nextBtn.disabled = true;
+    elements.submitAnswerBtn.disabled = true;
   };
 
   const setChoiceText = (texts) => {
@@ -819,6 +1243,7 @@ const QuizApp = (() => {
   };
 
   const handleAnswerChange = (event) => {
+    if (state.currentMode === 'test') return;
     if (event.target.name !== 'choice') return;
     const question = state.filteredQuestions[state.currentIndex];
     if (!question) return;
@@ -831,13 +1256,16 @@ const QuizApp = (() => {
       ...(state.answers[question.id] || {}),
       selectedChoice,
       isCorrect,
-      revealed: state.answers[question.id]?.revealed || false,
+      revealed: false,
     };
 
+    resetAnswerReveal();
+    clearError();
     updateSummary();
   };
 
   const handleFillInput = (event) => {
+    if (state.currentMode === 'test') return;
     const question = state.filteredQuestions[state.currentIndex];
     if (!question || !question.isFillBlank) return;
     const fillText = event.target.value || '';
@@ -850,48 +1278,136 @@ const QuizApp = (() => {
       ...(state.answers[question.id] || {}),
       fillText,
       isCorrect,
-      revealed: state.answers[question.id]?.revealed || false,
+      revealed: false,
     };
+    resetAnswerReveal();
+    clearError();
     updateSummary();
   };
 
-  const showCorrectAnswer = () => {
+  const isAnswered = (question, entry) => {
+    if (!entry || !entry.revealed) return false;
+    if (question.isFillBlank) {
+      return !!entry.fillText && entry.fillText.trim() !== '';
+    }
+    return !!entry.selectedChoice;
+  };
+
+  const getSessionStats = (pool) => {
+    const total = pool.length;
+    let answered = 0;
+    let correct = 0;
+
+    pool.forEach((q) => {
+      const entry = state.answers[q.id];
+      if (!isAnswered(q, entry)) return;
+      answered += 1;
+      if (entry.isCorrect) correct += 1;
+    });
+
+    const percent = total ? Math.round((correct / total) * 100) : 0;
+    return { total, answered, correct, percent };
+  };
+
+  const getMissedQuestions = () => {
+    const base = state.sessionBaseQuestions.length ? state.sessionBaseQuestions : state.filteredQuestions;
+    return base.filter((q) => {
+      const entry = state.answers[q.id];
+      return isAnswered(q, entry) && !entry.isCorrect;
+    });
+  };
+
+  const submitAnswer = () => {
+    if (state.currentMode === 'test') return;
     const question = state.filteredQuestions[state.currentIndex];
     if (!question) return;
-    const existing = state.answers[question.id] || { selectedChoice: null, isCorrect: false };
-    let isCorrect = existing.isCorrect;
+    const existing = state.answers[question.id] || { selectedChoice: null, fillText: '' };
+    const isLast = state.currentIndex >= state.filteredQuestions.length - 1;
+    let selectedChoice = existing.selectedChoice;
+    let fillText = existing.fillText || '';
+    let isCorrect = false;
 
     if (question.isFillBlank) {
-      if (existing.fillText && question.fillAnswer) {
-        isCorrect = existing.fillText.trim().toLowerCase() === question.fillAnswer.trim().toLowerCase();
-      } else {
-        isCorrect = false;
+      fillText = elements.fillInput.value || fillText || '';
+      if (!fillText.trim()) {
+        showError('Enter an answer before submitting.');
+        return;
       }
+      isCorrect =
+        question.fillAnswer && fillText.trim().length
+          ? fillText.trim().toLowerCase() === question.fillAnswer.trim().toLowerCase()
+          : false;
     } else {
+      const checked = elements.choicesForm.querySelector('input[name="choice"]:checked');
+      selectedChoice = checked ? checked.value : selectedChoice;
+      if (!selectedChoice) {
+        showError('Select an answer before submitting.');
+        return;
+      }
       isCorrect = question.correctChoice
-        ? existing.selectedChoice?.toUpperCase() === question.correctChoice
+        ? selectedChoice.toUpperCase() === question.correctChoice
         : false;
     }
 
-    state.answers[question.id] = { ...existing, isCorrect, revealed: true };
-    revealAnswer(question, state.answers[question.id]);
+    clearError();
+    const updated = { ...existing, selectedChoice, fillText, isCorrect, revealed: true };
+    state.answers[question.id] = updated;
+    revealAnswer(question, updated);
+    elements.submitAnswerBtn.classList.add('hidden');
+    elements.nextBtn.classList.remove('hidden');
+    elements.nextBtn.disabled = isLast;
     updateSummary();
+
+    if (isLast) {
+      showSessionSummary();
+    }
+  };
+
+  const formatChoiceLabel = (question, letter) => {
+    if (!letter) return '';
+    const text = question.choices?.[letter] || '';
+    return text ? `${letter}) ${text}` : `${letter})`;
   };
 
   const revealAnswer = (question, answerState) => {
-    elements.choicesForm.querySelectorAll('.choice').forEach((choiceEl) => {
-      choiceEl.classList.remove('correct');
-      if (!question.isFillBlank && choiceEl.dataset.choice === question.correctChoice) {
-        choiceEl.classList.add('correct');
-      }
-    });
+    resetAnswerReveal();
 
-    const correctText = question.isFillBlank
-      ? `Correct answer: ${question.fillAnswer || 'N/A'}`
-      : question.correctChoice
-        ? `Correct answer: ${question.correctChoice}`
-        : 'Correct answer: N/A';
-    elements.answerText.textContent = correctText;
+    const selectedChoice = answerState.selectedChoice || null;
+    const correctChoice = question.correctChoice || null;
+
+    if (!question.isFillBlank) {
+      elements.choicesForm.querySelectorAll('.choice').forEach((choiceEl) => {
+        const letter = choiceEl.dataset.choice;
+        if (letter === correctChoice) {
+          choiceEl.classList.add('correct');
+        }
+        if (selectedChoice && letter === selectedChoice && selectedChoice !== correctChoice) {
+          choiceEl.classList.add('incorrect');
+        }
+      });
+    }
+
+    const isCorrect = !!answerState.isCorrect;
+    elements.resultText.textContent = isCorrect ? 'Correct!' : 'Incorrect';
+    elements.resultText.classList.add(isCorrect ? 'correct' : 'incorrect');
+
+    if (question.isFillBlank) {
+      const submitted = (answerState.fillText || '').trim();
+      elements.userAnswerText.textContent = submitted
+        ? `Your answer: ${submitted}`
+        : 'Your answer: (no response)';
+      elements.userAnswerText.classList.add(isCorrect ? 'correct' : 'incorrect');
+      elements.answerText.textContent = `Correct answer: ${question.fillAnswer || 'N/A'}`;
+      elements.answerText.classList.add('correct');
+    } else {
+      const userLabel = selectedChoice ? formatChoiceLabel(question, selectedChoice) : '(no response)';
+      const correctLabel = correctChoice ? formatChoiceLabel(question, correctChoice) : 'N/A';
+      elements.userAnswerText.textContent = `Your answer: ${userLabel}`;
+      elements.userAnswerText.classList.add(isCorrect ? 'correct' : 'incorrect');
+      elements.answerText.textContent = `Correct answer: ${correctLabel}`;
+      elements.answerText.classList.add('correct');
+    }
+
     if (question.reference) {
       elements.referenceText.textContent = `Reference: ${question.reference}`;
       elements.referenceText.classList.remove('hidden');
@@ -925,22 +1441,62 @@ const QuizApp = (() => {
 
     state.filteredQuestions.forEach((q) => {
       const entry = state.answers[q.id];
-      if (!entry) return;
-      if (q.isFillBlank) {
-        if (entry.fillText && entry.fillText.trim() !== '') {
-          answered += 1;
-          if (entry.isCorrect) correct += 1;
-        }
-      } else if (entry.selectedChoice) {
-        answered += 1;
-        if (entry.isCorrect) correct += 1;
-      }
+      if (!isAnswered(q, entry)) return;
+      answered += 1;
+      if (entry.isCorrect) correct += 1;
     });
 
     const accuracy = answered ? Math.round((correct / answered) * 100) : 0;
     elements.answeredCount.textContent = `Answered: ${answered} of ${total}`;
     elements.correctCount.textContent = `Correct: ${correct}`;
     elements.accuracyStat.textContent = `Accuracy: ${accuracy}%`;
+  };
+
+  const showSessionSummary = () => {
+    if (state.currentMode === 'test') return;
+    const basePool =
+      state.reviewMode && state.filteredQuestions.length
+        ? state.filteredQuestions
+        : state.sessionBaseQuestions.length
+          ? state.sessionBaseQuestions
+          : state.filteredQuestions;
+    const stats = getSessionStats(basePool);
+    const missed = getMissedQuestions();
+
+    if (elements.summaryPercent) elements.summaryPercent.textContent = `Score: ${stats.percent}%`;
+    if (elements.summaryDetails)
+      elements.summaryDetails.textContent = `Answered ${stats.answered} of ${stats.total} • Correct ${stats.correct}`;
+    if (elements.reviewMissedBtn) elements.reviewMissedBtn.disabled = missed.length === 0;
+
+    elements.questionCard?.classList.add('hidden');
+    elements.actions?.classList.add('hidden');
+    elements.summaryBar?.classList.add('hidden');
+    elements.sessionSummary?.classList.remove('hidden');
+  };
+
+  const startOverSession = () => {
+    const base = state.sessionBaseQuestions.length ? state.sessionBaseQuestions : state.allQuestions;
+    state.filteredQuestions = [...base];
+    state.currentIndex = 0;
+    state.answers = {};
+    state.reviewMode = false;
+    hideSessionSummary();
+    renderQuestion();
+    updateSummary();
+  };
+
+  const reviewMissedQuestions = () => {
+    const missed = getMissedQuestions();
+    if (!missed.length) return;
+    missed.forEach((q) => {
+      delete state.answers[q.id]; // clear old response so the question is fresh
+    });
+    state.filteredQuestions = missed;
+    state.currentIndex = 0;
+    state.reviewMode = true;
+    hideSessionSummary();
+    renderQuestion();
+    updateSummary();
   };
 
   const clearError = () => {

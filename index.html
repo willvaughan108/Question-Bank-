@@ -19,7 +19,7 @@
     <div id="errorBanner" class="error-banner hidden"></div>
 
     <main id="mainContent">
-      <section id="loadScreen" class="load-screen">
+      <section id="loadScreen" class="load-screen hidden">
         <div class="load-card">
           <h1>MQ-4C NFO Question Bank</h1>
           <p class="subtext">Select your exported Access question bank (.json or .csv) and optional answer sheet (.csv).</p>
@@ -31,7 +31,7 @@
         </div>
       </section>
 
-      <section id="modeScreen" class="load-screen hidden">
+      <section id="modeScreen" class="load-screen">
         <div class="load-card">
           <h2>Choose a mode</h2>
           <p class="subtext">Study mode or generate a test from the bank.</p>
@@ -39,7 +39,6 @@
             <button id="studyModeBtn" class="primary">Study</button>
             <button id="testModeBtn" class="secondary">Generate Test</button>
           </div>
-          <button id="backToFilesBtn" class="ghost">Back to file selection</button>
         </div>
       </section>
 
@@ -64,7 +63,16 @@
           <div class="control-actions">
             <button id="applyFiltersBtn" class="secondary">Apply Filters</button>
             <button id="resetFiltersBtn" class="ghost">Reset Filters</button>
-            <button id="toModeFromStudy" class="ghost">Mode select</button>
+            <button id="toModeFromStudy" class="ghost">Home</button>
+          </div>
+        </div>
+
+        <div id="testTypePrompt" class="prompt-card hidden">
+          <h3>Select test type</h3>
+          <p class="subtext">Is this an Open or Closed book test?</p>
+          <div class="prompt-actions">
+            <button id="chooseOpenBtn" class="secondary" type="button">Open book</button>
+            <button id="chooseClosedBtn" class="primary" type="button">Closed book</button>
           </div>
         </div>
 
@@ -72,7 +80,6 @@
           <div class="control-group">
             <label>Test type</label>
             <div class="radio-row">
-              <label><input type="radio" name="bookMode" value="all" checked> All</label>
               <label><input type="radio" name="bookMode" value="open"> Open book</label>
               <label><input type="radio" name="bookMode" value="closed"> Closed book</label>
             </div>
@@ -80,13 +87,24 @@
           <div class="control-group">
             <label>Generation mode</label>
             <div class="radio-row">
-              <label><input type="radio" name="genMode" value="auto" checked> Auto</label>
-              <label><input type="radio" name="genMode" value="manual"> Manual</label>
+              <label><input type="radio" name="genMode" value="auto"> Auto</label>
+              <label><input type="radio" name="genMode" value="manual" checked> Manual</label>
             </div>
           </div>
           <div class="control-group">
             <label for="testCategorySelect">Subject (category)</label>
             <select id="testCategorySelect"></select>
+          </div>
+          <div id="autoQuestionCount" class="control-group auto-group hidden">
+            <label for="questionCountInput">Number of questions (auto)</label>
+            <input id="questionCountInput" type="number" min="1" step="1" placeholder="Use all available">
+          </div>
+          <div class="control-group auto-group hidden">
+            <label for="distributionSelect">Distribution (auto)</label>
+            <select id="distributionSelect">
+              <option value="random">Completely random</option>
+              <option value="even">Evenly distribute by subject</option>
+            </select>
           </div>
           <div class="control-group checkbox-group">
             <input type="checkbox" id="testShuffleToggle">
@@ -94,8 +112,9 @@
           </div>
           <div class="control-actions">
             <button id="generateTestBtn" type="button" class="primary">Generate Test</button>
+            <button id="generateListBtn" type="button" class="secondary">Generate Question List</button>
             <button id="resetTestBtn" type="button" class="ghost">Reset Test</button>
-            <button id="toModeFromTest" class="ghost">Mode select</button>
+            <button id="toModeFromTest" class="ghost">Home</button>
           </div>
         </div>
 
@@ -107,8 +126,17 @@
             </div>
             <button id="selectAllManual" class="secondary" type="button">Select all in view</button>
             <button id="clearManual" class="ghost" type="button">Clear selection</button>
+            <div id="manualSelectionCount" class="manual-count">Selected: 0</div>
           </div>
           <div id="manualList" class="manual-list"></div>
+        </div>
+
+        <div id="questionListPanel" class="list-panel hidden">
+          <div class="list-panel__header">
+            <h3>Question list</h3>
+            <span id="questionListCount" class="pill">0</span>
+          </div>
+          <div id="questionList" class="question-list"></div>
         </div>
 
         <div class="summary-bar" id="summaryBar">
@@ -152,16 +180,29 @@
             </form>
 
             <div id="answerReveal" class="answer-reveal hidden">
-              <p id="answerText">Correct answer:</p>
+              <p id="resultText" class="result-text"></p>
+              <p id="userAnswerText" class="user-answer"></p>
+              <p id="answerText" class="correct-answer">Correct answer:</p>
               <p id="referenceText" class="reference"></p>
             </div>
 
             <div class="actions">
-              <button id="showAnswerBtn" type="button" class="secondary">Show Answer</button>
+              <button id="submitAnswerBtn" type="button" class="secondary">Submit Answer</button>
               <div class="nav-buttons">
                 <button id="prevBtn" type="button" class="ghost">Previous</button>
-                <button id="nextBtn" type="button" class="primary">Next</button>
+                <button id="nextBtn" type="button" class="primary">Next Question</button>
+                <button id="skipToSummaryBtn" type="button" class="ghost">End &amp; Summary</button>
               </div>
+            </div>
+          </div>
+
+          <div id="sessionSummary" class="summary-card hidden">
+            <h3>Session summary</h3>
+            <p id="summaryPercent" class="summary-percent">Score: 0%</p>
+            <p id="summaryDetails" class="summary-details">Answered 0 of 0 • Correct 0</p>
+            <div class="summary-actions">
+              <button id="startOverBtn" type="button" class="primary">Start Over</button>
+              <button id="reviewMissedBtn" type="button" class="secondary">Review Missed</button>
             </div>
           </div>
         </section>
@@ -169,6 +210,7 @@
     </main>
   </div>
 
+  <script src="embeddedData.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
